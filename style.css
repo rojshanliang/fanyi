@@ -1,0 +1,66 @@
+body {
+    width: 300px;
+    min-height: 200px;
+    padding: 15px;
+    margin: 0;
+    font-family: "Microsoft YaHei", Arial, sans-serif;
+}
+
+h1 {
+    font-size: 18px;
+    margin: 0 0 15px 0;
+    text-align: center;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+label {
+    font-size: 14px;
+    color: #333;
+}
+
+select, input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 14px;
+}
+
+button {
+    width: 100%;
+    padding: 10px;
+    background-color: #4285f4;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-top: 10px;
+}
+
+button:hover {
+    background-color: #3367d6;
+}
+
+#translationResult {
+    margin-top: 15px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #f8f9fa;
+    min-height: 50px;
+    font-size: 14px;
+    word-break: break-word;
+}

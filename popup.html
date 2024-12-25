@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>为我翻译</title>
+    <style>
+        body {
+            width: 300px;
+            padding: 15px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        h1 {
+            font-size: 20px;
+            margin: 0 0 15px 0;
+            text-align: center;
+            color: #333;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-size: 14px;
+            color: #666;
+        }
+        select, input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #4285f4;
+            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+        }
+        button {
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status-message {
+            font-size: 14px;
+            padding: 8px;
+            border-radius: 4px;
+            display: none;
+            text-align: center;
+        }
+        .success {
+            background-color: #e6f4ea;
+            color: #137333;
+        }
+        .error {
+            background-color: #fce8e6;
+            color: #c5221f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>为我翻译</h1>
+        <div class="form-group">
+            <label for="targetLanguage">目标语言:</label>
+            <select id="targetLanguage">
+                <option value="zh">中文</option>
+                <option value="en">英文</option>
+                <option value="ja">日文</option>
+                <option value="ko">韩文</option>
+                <option value="fr">法文</option>
+                <option value="de">德文</option>
+                <option value="es">西班牙文</option>
+                <option value="ru">俄文</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="apiKey">API Key:</label>
+            <input type="password" id="apiKey" placeholder="请输入您的 API Key">
+        </div>
+        <div class="form-group" id="modelSelectGroup" style="display: none;">
+            <label for="modelSelect">选择模型:</label>
+            <select id="modelSelect" class="form-control" disabled>
+                <option value="">请先输入有效的 API Key</option>
+            </select>
+        </div>
+        <button id="saveConfig">保存配置</button>
+        <div id="statusMessage" class="status-message"></div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html>
