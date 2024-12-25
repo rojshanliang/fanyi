@@ -187,7 +187,7 @@ console.log('Content script loaded');
                     const results = await Promise.all(promises);
                     batchPromises.push(...results.filter(r => r !== null));
                     
-                    // 动�����调整请求间隔
+                    // 动�������调整请求间隔
                     if (i + this.maxConcurrent < batches.length) {
                         await new Promise(resolve => 
                             setTimeout(resolve, Math.max(500, this.minInterval))
@@ -217,13 +217,21 @@ console.log('Content script loaded');
                     this.lastRequestTime = Date.now();
                     const response = await new Promise((resolve, reject) => {
                         chrome.storage.sync.get(['model'], function(result) {
+                            console.log('Retrieved model for translation:', result.model);
                             chrome.runtime.sendMessage({
                                 action: "translateText",
                                 text: text,
                                 targetLanguage: 'zh',
                                 apiKey: apiKey,
                                 model: result.model || 'gemini-pro' // 使用保存的模型或默认值
-                            }, resolve);
+                            }, function(response) {
+                                console.log('Translation response received:', {
+                                    success: !!response,
+                                    hasTranslatedText: response && !!response.translatedText,
+                                    model: result.model
+                                });
+                                resolve(response);
+                            });
                         });
                     });
 
