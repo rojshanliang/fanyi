@@ -5,6 +5,7 @@ console.log('Content script loaded');
 (function() {
     const originalTexts = new Map();
     let isTranslating = false;
+    let shouldStopTranslation = false;
     let lastTranslatedHeight = 0;
     let translateButton = null;
     let apiKey = null;
@@ -187,7 +188,7 @@ console.log('Content script loaded');
                     const results = await Promise.all(promises);
                     batchPromises.push(...results.filter(r => r !== null));
                     
-                    // 动�������调整请求间隔
+                    // 动���整请求间隔
                     if (i + this.maxConcurrent < batches.length) {
                         await new Promise(resolve => 
                             setTimeout(resolve, Math.max(500, this.minInterval))
@@ -217,18 +218,20 @@ console.log('Content script loaded');
                     this.lastRequestTime = Date.now();
                     const response = await new Promise((resolve, reject) => {
                         chrome.storage.sync.get(['model'], function(result) {
-                            console.log('Retrieved model for translation:', result.model);
+                            console.log('Using model for translation:', result.model || 'gemini-pro (default)');
                             chrome.runtime.sendMessage({
                                 action: "translateText",
                                 text: text,
                                 targetLanguage: 'zh',
                                 apiKey: apiKey,
-                                model: result.model || 'gemini-pro' // 使用保存的模型或默认值
+                                model: result.model || 'gemini-pro'
                             }, function(response) {
-                                console.log('Translation response received:', {
+                                console.log('Translation request completed:', {
+                                    model: result.model || 'gemini-pro (default)',
                                     success: !!response,
+                                    textLength: text.length,
                                     hasTranslatedText: response && !!response.translatedText,
-                                    model: result.model
+                                    timestamp: new Date().toISOString()
                                 });
                                 resolve(response);
                             });
@@ -267,9 +270,9 @@ console.log('Content script loaded');
         }
     };
 
-    // 修改翻译按钮的创建和状态管理
+    // 修改按钮的创建和事件处理
     function createTranslateButton() {
-        console.log('Creating translate button'); // 添加按钮创建日志
+        console.log('Creating translate button');
         
         const existingButton = document.getElementById('translate-button');
         if (existingButton) {
@@ -299,31 +302,104 @@ console.log('Content script loaded');
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             transition: all 0.3s ease;
         `;
-        
-        console.log('Adding click event listener'); // 添加事件监听器日志
+
+        // 修改 hover 事件处理
+        button.addEventListener('mouseenter', () => {
+            console.log('Button hover, isTranslating:', isTranslating);
+            if (isTranslating) {
+                const progressText = button.querySelector('.progress-text');
+                if (progressText && progressText.style.display === 'inline') {
+                    progressText.dataset.originalText = progressText.textContent;
+                    progressText.textContent = '停止';
+                    button.style.backgroundColor = '#f44336';
+                    console.log('Changed to stop state');
+                }
+            }
+        });
+
+        // 修改鼠标离开事件处理
+        button.addEventListener('mouseleave', () => {
+            console.log('Button leave, isTranslating:', isTranslating);
+            if (isTranslating) {
+                const progressText = button.querySelector('.progress-text');
+                if (progressText && progressText.style.display === 'inline' && progressText.textContent === '停止') {
+                    progressText.textContent = progressText.dataset.originalText;
+                    const progress = parseInt(progressText.dataset.originalText);
+                    if (!isNaN(progress)) {
+                        const hue = Math.round(120 * (progress / 100));
+                        button.style.backgroundColor = `hsl(${hue}, 70%, 50%)`;
+                    }
+                    console.log('Restored progress state');
+                }
+            }
+        });
+
+        // 修改点击事件处理
         button.addEventListener('click', () => {
-            console.log('Button clicked, calling handleTranslateClick'); // 添加点击处理日志
+            console.log('Button clicked, isTranslating:', isTranslating);
+            if (isTranslating) {
+                console.log('Stopping translation...');
+                shouldStopTranslation = true;
+                isTranslating = false;
+                const buttonText = button.querySelector('.button-text');
+                const progressText = button.querySelector('.progress-text');
+                if (buttonText && progressText) {
+                    progressText.style.display = 'none';
+                    buttonText.style.display = 'inline';
+                    buttonText.textContent = '已停止';
+                    button.style.backgroundColor = '#f44336';
+                    setTimeout(() => {
+                        buttonText.textContent = '翻译';
+                        button.style.backgroundColor = '#4285f4';
+                    }, 2000);
+                }
+                // 立即清理正在进行的翻译任务
+                requestLimiter.queue = [];
+                requestLimiter.isProcessing = false;
+                return;
+            }
+            console.log('Starting translation...');
+            shouldStopTranslation = false;
             handleTranslateClick();
         });
-        
+
         document.body.appendChild(button);
         translateButton = button;
-        console.log('Translate button created and added to page'); // 添加按钮添加完成日志
+        console.log('Translate button created and added to page');
         return button;
     }
 
-    // 更新翻译进度
+    // 修改进度更新函数
     function updateProgress(processed, total) {
         const button = document.getElementById('translate-button');
         if (!button) return;
         
         const buttonText = button.querySelector('.button-text');
         const progressText = button.querySelector('.progress-text');
+        if (!buttonText || !progressText) return;
         
-        if (processed === 0 || total === 0) {
+        if (shouldStopTranslation) {
+            console.log('Translation stopped, skipping progress update');
+            return;
+        }
+        
+        if (processed === 0 && total > 0) {
+            isTranslating = true;
+            buttonText.style.display = 'none';
+            progressText.style.display = 'inline';
+            progressText.textContent = '0%';
+            progressText.dataset.originalText = '0%';
+            button.style.backgroundColor = '#4285f4';
+            console.log('Started translation progress');
+            return;
+        }
+        
+        if (processed === 0 && total === 0) {
+            isTranslating = false;
             buttonText.style.display = 'inline';
             progressText.style.display = 'none';
             button.style.backgroundColor = '#4285f4';
+            console.log('Reset translation progress');
             return;
         }
         
@@ -331,12 +407,14 @@ console.log('Content script loaded');
         buttonText.style.display = 'none';
         progressText.style.display = 'inline';
         progressText.textContent = `${progress}%`;
+        progressText.dataset.originalText = `${progress}%`;
         
-        // 根据进度改变按钮颜色
-        const hue = Math.round(120 * (progress / 100)); // 从蓝色渐变到绿色
+        const hue = Math.round(120 * (progress / 100));
         button.style.backgroundColor = `hsl(${hue}, 70%, 50%)`;
+        console.log(`Updated progress: ${progress}%`);
         
         if (progress === 100) {
+            isTranslating = false;
             setTimeout(() => {
                 buttonText.style.display = 'inline';
                 progressText.style.display = 'none';
@@ -346,6 +424,7 @@ console.log('Content script loaded');
                     buttonText.textContent = '翻译';
                 }, 2000);
             }, 500);
+            console.log('Completed translation progress');
         }
     }
 
@@ -365,7 +444,7 @@ console.log('Content script loaded');
         }
     }
 
-    // 处理翻译按钮点击
+    // 处理翻���按钮点击
     async function handleTranslateClick() {
         console.log('Translation button clicked');
 
@@ -377,24 +456,45 @@ console.log('Content script loaded');
         try {
             const getApiKey = () => {
                 return new Promise((resolve, reject) => {
-                    try {
-                        // 确保在 content script 中正确访问 chrome.runtime
-                        if (typeof chrome === 'undefined' || !chrome.runtime) {
-                            console.error('Chrome runtime not available, trying to reconnect...');
-                            // 尝试重新连接
-                            setTimeout(() => {
-                                if (typeof chrome !== 'undefined' && chrome.runtime) {
-                                    chrome.runtime.sendMessage({ action: "getApiKey" }, handleResponse);
-                                } else {
-                                    reject(new Error('Chrome runtime not available after retry'));
-                                }
-                            }, 1000);
+                    let retryCount = 0;
+                    const maxRetries = 3;
+                    const retryInterval = 1000; // 1秒
+
+                    const tryGetApiKey = () => {
+                        // 检查 chrome 和 chrome.runtime 是否可用
+                        if (typeof chrome === 'undefined') {
+                            console.error('Chrome API not available');
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                console.log(`Retrying (${retryCount}/${maxRetries}) in ${retryInterval}ms...`);
+                                setTimeout(tryGetApiKey, retryInterval);
+                                return;
+                            }
+                            reject(new Error('Chrome API not available after retries'));
+                            return;
+                        }
+
+                        if (!chrome.runtime) {
+                            console.error('Chrome runtime not available');
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                console.log(`Retrying (${retryCount}/${maxRetries}) in ${retryInterval}ms...`);
+                                setTimeout(tryGetApiKey, retryInterval);
+                                return;
+                            }
+                            reject(new Error('Chrome runtime not available after retries'));
                             return;
                         }
 
                         const handleResponse = (response) => {
                             if (chrome.runtime.lastError) {
                                 console.error('Runtime error:', chrome.runtime.lastError);
+                                if (retryCount < maxRetries) {
+                                    retryCount++;
+                                    console.log(`Retrying (${retryCount}/${maxRetries}) in ${retryInterval}ms...`);
+                                    setTimeout(tryGetApiKey, retryInterval);
+                                    return;
+                                }
                                 reject(chrome.runtime.lastError);
                             } else if (!response || !response.apiKey) {
                                 reject(new Error('No API Key found'));
@@ -403,11 +503,21 @@ console.log('Content script loaded');
                             }
                         };
 
-                        chrome.runtime.sendMessage({ action: "getApiKey" }, handleResponse);
-                    } catch (error) {
-                        console.error('Message sending error:', error);
-                        reject(error);
-                    }
+                        try {
+                            chrome.runtime.sendMessage({ action: "getApiKey" }, handleResponse);
+                        } catch (error) {
+                            console.error('Message sending error:', error);
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                console.log(`Retrying (${retryCount}/${maxRetries}) in ${retryInterval}ms...`);
+                                setTimeout(tryGetApiKey, retryInterval);
+                                return;
+                            }
+                            reject(error);
+                        }
+                    };
+
+                    tryGetApiKey();
                 });
             };
 
@@ -469,10 +579,10 @@ console.log('Content script loaded');
             const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
             const scrollBottom = scrollTop + viewportHeight;
             
-            // 增加预加载范围，提前 1000px 开始检测
+            // 增加预���载范围，提前 1000px 开始检测
             const preloadDistance = 1000;
             
-            // 获取在可视区域及预加载范围内的未翻译节点
+            // ��取在可视区域及预加载范围内的未翻译节点
             const untranslatedNodes = getVisibleTextNodes().filter(node => {
                 const rect = node.parentElement.getBoundingClientRect();
                 const nodeTop = rect.top + scrollTop;
@@ -533,7 +643,7 @@ console.log('Content script loaded');
             NodeFilter.SHOW_TEXT,
             {
                 acceptNode: function(node) {
-                    // 增加更多需要排除的元素
+                    // 增加更多需要���除的元素
                     const excludeTags = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'META', 'LINK', 'BUTTON'];
                     const excludeClasses = ['translate-button', 'progress-text', 'button-text'];
                     
@@ -587,20 +697,25 @@ console.log('Content script loaded');
 
             const totalNodes = visibleTextNodes.length;
             let processedNodes = 0;
+            isTranslating = true;
             updateProgress(0, totalNodes);
 
-            // 增加批次大小
             const batchSize = 5;
             const batches = [];
             
-            // 按批次分组
             for (let i = 0; i < visibleTextNodes.length; i += batchSize) {
                 batches.push(visibleTextNodes.slice(i, i + batchSize));
             }
 
-            // 并发处理多个批次
-            const concurrentBatches = 3; // 同时处理3个批次
+            const concurrentBatches = 3;
             for (let i = 0; i < batches.length; i += concurrentBatches) {
+                if (shouldStopTranslation) {
+                    console.log('Translation stopped by user');
+                    isTranslating = false;
+                    updateProgress(0, 0);
+                    break;
+                }
+
                 const currentBatches = batches.slice(i, i + concurrentBatches);
                 const promises = currentBatches.map(async batch => {
                     try {
@@ -617,7 +732,6 @@ console.log('Content script loaded');
 
                 await Promise.all(promises);
                 
-                // 添加短暂延迟避免请求过于密集
                 if (i + concurrentBatches < batches.length) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
@@ -626,6 +740,8 @@ console.log('Content script loaded');
             updateProgress(totalNodes, totalNodes);
         } catch (error) {
             console.error('Translation error:', error);
+            isTranslating = false;
+            updateProgress(0, 0);
             throw error;
         }
     }
@@ -636,7 +752,7 @@ console.log('Content script loaded');
         createTranslateButton();
     });
 
-    // 为了处理可能的动态加载情况，也在这里直接调用
+    // 为了处理可能的动态加载情况，也在这��直接调��
     console.log('Content script executing immediately'); // 添加脚本执行日志
     createTranslateButton();
 })();

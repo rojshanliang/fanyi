@@ -3,44 +3,65 @@
 document.addEventListener('DOMContentLoaded', function() {
     const modelSelect = document.getElementById('modelSelect');
     const modelSelectGroup = document.getElementById('modelSelectGroup');
+    const testButton = document.getElementById('testApiKey');
+    const apiKeyInput = document.getElementById('apiKey');
+    let lastValidApiKey = ''; // 记录上次有效的API Key
+    let lastSelectedModel = ''; // 记录上次选择的模型
     
     // 获取已保存的设置
     chrome.storage.sync.get(['apiKey', 'targetLanguage', 'model'], function(result) {
+        console.log('Initial settings loaded:', {
+            hasApiKey: !!result.apiKey,
+            targetLanguage: result.targetLanguage,
+            currentModel: result.model
+        });
+
         if (result.apiKey) {
-            document.getElementById('apiKey').value = result.apiKey;
+            apiKeyInput.value = result.apiKey;
+            lastValidApiKey = result.apiKey;
             modelSelectGroup.style.display = 'block';
-            validateApiKeyAndUpdateModels(result.apiKey, result.model);
-        } else {
-            modelSelectGroup.style.display = 'none';
+            
+            // 如果有已保存的模型，直接显示
+            if (result.model) {
+                lastSelectedModel = result.model;
+                modelSelect.innerHTML = '';
+                const option = document.createElement('option');
+                option.value = result.model;
+                option.textContent = result.model;
+                modelSelect.appendChild(option);
+                modelSelect.value = result.model;
+                modelSelect.disabled = false;
+            }
         }
+
         if (result.targetLanguage) {
             document.getElementById('targetLanguage').value = result.targetLanguage;
         }
     });
 
-    // 添加模型选择变化事件监听
-    modelSelect.addEventListener('change', function(e) {
-        const selectedModel = e.target.value;
-        console.log('Model selection changed:', selectedModel);
-        // 自动保存选择的模型
-        chrome.storage.sync.set({ model: selectedModel }, function() {
-            if (chrome.runtime.lastError) {
-                console.error('Error saving model selection:', chrome.runtime.lastError);
-                showMessage('保存模型选择失败', 'error');
-            } else {
-                console.log('Model selection saved successfully:', selectedModel);
-                showMessage('模型选择已保存', 'success');
-            }
-        });
+    // API Key 输入框变化事件
+    apiKeyInput.addEventListener('input', function(e) {
+        const apiKey = e.target.value.trim();
+        if (!apiKey) {
+            modelSelectGroup.style.display = 'none';
+            modelSelect.innerHTML = '<option value="">请先输入有效的 API Key</option>';
+            modelSelect.disabled = true;
+        }
     });
 
-    // API Key 输入框变化时更新模型列表
-    document.getElementById('apiKey').addEventListener('input', function(e) {
-        const apiKey = e.target.value.trim();
+    // API Key 测试按钮点击事件
+    testButton.addEventListener('click', function() {
+        const apiKey = apiKeyInput.value.trim();
         if (apiKey) {
-            modelSelectGroup.style.display = 'block';
-            validateApiKeyAndUpdateModels(apiKey);
+            console.log('用户操作 >> 开始测试 API Key:', {
+                时间: new Date().toLocaleTimeString()
+            });
+            testButton.disabled = true;
+            testButton.textContent = '测试中...';
+            
+            validateApiKeyAndUpdateModels(apiKey, false);
         } else {
+            showMessage('请输入 API Key', 'error');
             modelSelectGroup.style.display = 'none';
             modelSelect.innerHTML = '<option value="">请先输入有效的 API Key</option>';
             modelSelect.disabled = true;
@@ -48,42 +69,56 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // 验证 API Key 并更新模型列表
-    function validateApiKeyAndUpdateModels(apiKey, selectedModel = null) {
-        console.log('Validating API Key and updating models. Current selected model:', selectedModel);
+    function validateApiKeyAndUpdateModels(apiKey, isSilent = false) {
         chrome.runtime.sendMessage(
             { 
                 action: "validateApiKey", 
                 apiKey: apiKey
             }, 
             function(response) {
-                console.log('Validation response:', response);
+                testButton.disabled = false;
+                
                 if (response && response.isValid && response.models) {
-                    modelSelect.innerHTML = '';
+                    if (!isSilent) {
+                        testButton.textContent = '测试通过';
+                        testButton.className = 'test-button success';
+                        showMessage('API Key 验证成功', 'success');
+                    } else {
+                        testButton.textContent = '测试密钥';
+                    }
                     
-                    console.log('Available models:', response.models);
+                    lastValidApiKey = apiKey;
+                    modelSelectGroup.style.display = 'block';
+                    
+                    // 保存当前选择的值
+                    const currentValue = modelSelect.value;
+                    
+                    modelSelect.innerHTML = '';
+                    const defaultOption = document.createElement('option');
+                    defaultOption.value = '';
+                    defaultOption.textContent = '请选择模型';
+                    modelSelect.appendChild(defaultOption);
+                    
                     response.models.forEach(model => {
                         const option = document.createElement('option');
                         option.value = model.name.split('/').pop();
-                        option.textContent = `${model.displayName} - ${model.description}`;
+                        option.textContent = `${model.displayName}`;
                         modelSelect.appendChild(option);
-                        console.log('Added model option:', option.value);
                     });
 
-                    if (selectedModel && modelSelect.querySelector(`option[value="${selectedModel}"]`)) {
-                        console.log('Setting previously selected model:', selectedModel);
-                        modelSelect.value = selectedModel;
-                    } else if (modelSelect.options.length > 0) {
-                        console.log('Setting default model:', modelSelect.options[0].value);
-                        modelSelect.selectedIndex = 0;
-                        // 如果没有之前选择的模型，保存第一个模型作为默认选择
-                        chrome.storage.sync.set({ model: modelSelect.value }, function() {
-                            console.log('Saved default model:', modelSelect.value);
-                        });
+                    // 恢复之前的选择
+                    if (lastSelectedModel && !isSilent) {
+                        modelSelect.value = lastSelectedModel;
                     }
-                    
                     modelSelect.disabled = false;
                 } else {
-                    console.log('Validation failed or no models available');
+                    if (!isSilent) {
+                        testButton.textContent = '测试失败';
+                        testButton.className = 'test-button error';
+                        showMessage('API Key 验证失败', 'error');
+                    } else {
+                        testButton.textContent = '测试密钥';
+                    }
                     modelSelect.innerHTML = '<option value="">请先输入有效的 API Key</option>';
                     modelSelect.disabled = true;
                     modelSelectGroup.style.display = 'none';
@@ -92,17 +127,24 @@ document.addEventListener('DOMContentLoaded', function() {
         );
     }
 
+    // 模型选择变化事件
+    modelSelect.addEventListener('change', function(e) {
+        const selectedModel = e.target.value;
+        if (selectedModel) {
+            lastSelectedModel = selectedModel;
+            console.log('用户操作 >> 选择模型:', {
+                选择的模型: selectedModel,
+                模型名称: e.target.options[e.target.selectedIndex].textContent,
+                操作时间: new Date().toLocaleTimeString()
+            });
+        }
+    });
+
     // 保存配置按钮点击事件
     document.getElementById('saveConfig').addEventListener('click', function() {
-        const apiKey = document.getElementById('apiKey').value.trim();
+        const apiKey = apiKeyInput.value.trim();
         const targetLanguage = document.getElementById('targetLanguage').value;
         const model = modelSelect.value;
-
-        console.log('Saving configuration:', {
-            targetLanguage,
-            model,
-            hasApiKey: !!apiKey
-        });
 
         if (!apiKey) {
             showMessage('请输入 API Key', 'error');
@@ -120,7 +162,12 @@ document.addEventListener('DOMContentLoaded', function() {
             targetLanguage: targetLanguage,
             model: model
         }, function() {
-            console.log('Configuration saved successfully');
+            console.log('配置保存 >> 所有设置已保存:', {
+                目标语言: targetLanguage,
+                当前模型: model,
+                保存时间: new Date().toLocaleTimeString(),
+                状态: '✓ 保存成功'
+            });
             showMessage('配置已保存', 'success');
         });
     });

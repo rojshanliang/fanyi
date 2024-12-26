@@ -195,17 +195,64 @@ class RequestManager {
     async validateApiKey(apiKey) {
         if (!apiKey) return { isValid: false, models: [] };
         
-        try {
-            // 首先获取可用模型
-            const availableModels = await this.getAvailableModels(apiKey);
-            
-            if (availableModels.length === 0) {
-                return { isValid: false, models: [] };
-            }
+        console.log('API验证 >> 开始验证:', {
+            操作时间: new Date().toLocaleTimeString(),
+            状态: '验证中...'
+        });
 
-            // 使用第一个可用模型进行验证
-            const testModel = availableModels[0].name.split('/').pop();
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${apiKey}`, {
+        try {
+            const response = await this.getAvailableModels(apiKey);
+            console.log('API验证 >> 获取可用模型:', {
+                模型总数: response.length,
+                操作时间: new Date().toLocaleTimeString(),
+                状态: '✓ 成功'
+            });
+
+            // 验证响应并获取模型列表
+            const validationResponse = await this.testModelAccess(apiKey);
+            console.log('API验证 >> 模型访问测试:', {
+                模型版本: validationResponse.modelVersion,
+                Token统计: validationResponse.usageMetadata,
+                操作时间: new Date().toLocaleTimeString(),
+                状态: '✓ 成功'
+            });
+
+            // 过滤并处理模型列表
+            const models = response
+                .filter(model => model.name.includes('gemini'))
+                .map(model => ({
+                    name: model.name,
+                    displayName: model.displayName,
+                    description: model.description.split('.')[0]
+                }));
+
+            console.log('API验证 >> 验证完成:', {
+                验证结果: '✓ 有效',
+                可用模型数量: models.length,
+                操作时间: new Date().toLocaleTimeString(),
+                模型列表: models.map(m => m.displayName)
+            });
+
+            return { isValid: true, models };
+        } catch (error) {
+            console.error('API验证 >> 验证失败:', {
+                错误信息: error.message,
+                操作时间: new Date().toLocaleTimeString(),
+                状态: '× 失败'
+            });
+            return { isValid: false, error: error.message };
+        }
+    }
+
+    // 添加模型访问测试方法
+    async testModelAccess(apiKey) {
+        try {
+            console.log('API验证 >> 开始测试模型访问:', {
+                时间: new Date().toLocaleTimeString(),
+                状态: '测试中...'
+            });
+            
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -213,27 +260,28 @@ class RequestManager {
                 body: JSON.stringify({
                     contents: [{
                         parts: [{
-                            text: 'Hello'
+                            text: 'Test'
                         }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.1,
-                        topK: 1,
-                        topP: 1
-                    }
+                    }]
                 })
             });
 
             const data = await response.json();
-            console.log('API Key validation response:', data);
+            
+            console.log('API验证 >> 模型访问测试结果:', {
+                响应状态: response.ok ? '✓ 成功' : '× 失败',
+                时间: new Date().toLocaleTimeString(),
+                详细信息: data
+            });
 
-            return {
-                isValid: response.ok,
-                models: availableModels
-            };
+            return data;
         } catch (error) {
-            console.error('API Key validation error:', error);
-            return { isValid: false, models: [] };
+            console.error('API验证 >> 模型访问测试失败:', {
+                错误信息: error.message,
+                时间: new Date().toLocaleTimeString(),
+                状态: '× 失败'
+            });
+            throw error;
         }
     }
 }
@@ -243,34 +291,63 @@ const requestManager = new RequestManager();
 
 // 监听来自content script的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    console.log('Received message in background:', request);
+    console.log('后台消息 >> 接收到请求:', {
+        请求类型: request.action,
+        时间: new Date().toLocaleTimeString()
+    });
     
     if (request.action === "getApiKey") {
-        chrome.storage.sync.get(['apiKey'], function(result) {
-            sendResponse({ apiKey: result.apiKey });
+        chrome.storage.sync.get(['apiKey', 'model'], function(result) {
+            console.log('配置获取 >> 当前设置:', {
+                API密钥: result.apiKey ? '已设置' : '未设置',
+                当前模型: result.model || '未设置',
+                获取时间: new Date().toLocaleTimeString()
+            });
+            sendResponse({ apiKey: result.apiKey, model: result.model });
         });
         return true;
     }
 
     if (request.action === "validateApiKey") {
-        console.log('Validating API Key...');
+        console.log('API验证 >> 开始验证请求:', {
+            API密钥: request.apiKey ? '已提供' : '未提供',
+            时间: new Date().toLocaleTimeString()
+        });
+
         requestManager.validateApiKey(request.apiKey)
             .then(response => {
-                console.log('Validation response:', response);
-                sendResponse(response); // 直接发送完整的响应对象，包含 isValid 和 models
+                console.log('API验证 >> 验证响应:', {
+                    验证结果: response.isValid ? '✓ 有效' : '× 无效',
+                    可用模型数: response.models?.length || 0,
+                    可用模型: response.models?.map(m => m.displayName),
+                    响应时间: new Date().toLocaleTimeString()
+                });
+                sendResponse(response);
             })
             .catch(error => {
-                console.error('API Key validation error:', error);
+                console.error('API验证 >> 验证错误:', {
+                    错误信息: error.message,
+                    发生时间: new Date().toLocaleTimeString(),
+                    状态: '× 失败'
+                });
                 sendResponse({ isValid: false, models: [] });
             });
         return true;
     }
 
     if (request.action === "translateText") {
-        console.log('Processing translate text request');
+        console.log('翻译请求 >> 开始处理:', {
+            目标语言: request.targetLanguage,
+            使用模型: request.model,
+            文本长度: request.text.length,
+            请求时间: new Date().toLocaleTimeString()
+        });
         
         if (!request.apiKey) {
-            console.log('No API Key provided');
+            console.log('翻译请求 >> 验证失败:', {
+                原因: '缺少 API Key',
+                时间: new Date().toLocaleTimeString()
+            });
             sendResponse({ 
                 translatedText: '翻译请求失败: 缺少 API Key。\n' +
                                '请按以下步骤设置：\n' +
@@ -285,11 +362,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // 直接处理请求，不进行预验证
         requestManager.addRequest(request)
             .then(response => {
-                console.log('Translation response:', response);
+                console.log('翻译请求 >> 处理完成:', {
+                    使用模型: request.model,
+                    翻译状态: response.translatedText.includes('翻译请求失败') ? '× 失败' : '✓ 成功',
+                    完成时间: new Date().toLocaleTimeString()
+                });
                 sendResponse(response);
             })
             .catch(error => {
-                console.error('Translation error:', error);
+                console.error('翻译请求 >> 发生错误:', {
+                    使用模型: request.model,
+                    错误类型: error.message.includes('authentication credentials') ? 'API认证错误' :
+                             error.message.includes('network') ? '网络错误' :
+                             error.code === 429 ? '请求频率限制' : '其他错误',
+                    错误信息: error.message,
+                    发生时间: new Date().toLocaleTimeString()
+                });
                 let errorMessage = '翻译请求失败: ';
                 
                 if (error.message.includes('authentication credentials')) {

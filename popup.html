@@ -72,6 +72,36 @@
             background-color: #fce8e6;
             color: #c5221f;
         }
+        .test-button {
+            margin-left: 8px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            cursor: pointer;
+        }
+        .test-button.success {
+            background-color: #e6f4ea;
+            color: #137333;
+            border-color: #137333;
+        }
+        .test-button.error {
+            background-color: #fce8e6;
+            color: #c5221f;
+            border-color: #c5221f;
+        }
+        .test-button:disabled {
+            background-color: #f5f5f5;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .api-key-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .api-key-container input {
+            flex: 1;
+        }
     </style>
 </head>
 <body>
@@ -92,11 +122,14 @@
         </div>
         <div class="form-group">
             <label for="apiKey">API Key:</label>
-            <input type="password" id="apiKey" placeholder="请输入您的 API Key">
+            <div class="api-key-container">
+                <input type="password" id="apiKey" placeholder="请输入您的 API Key">
+                <button id="testApiKey" class="test-button">测试密钥</button>
+            </div>
         </div>
         <div class="form-group" id="modelSelectGroup" style="display: none;">
-            <label for="modelSelect">选择模型:</label>
-            <select id="modelSelect" class="form-control" disabled>
+            <label for="modelSelect">选择模型</label>
+            <select id="modelSelect" disabled>
                 <option value="">请先输入有效的 API Key</option>
             </select>
         </div>
