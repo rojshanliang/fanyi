@@ -36,6 +36,15 @@ class RequestManager {
         this.retryDelays = [3000, 6000, 12000, 24000]; // 指数退避延迟
         this.requestQueue = [];
         this.isProcessing = false;
+        this.quotaLimit = 60; // 每分钟请求限制
+        this.quotaUsed = 0;
+        this.quotaResetTime = Date.now() + 60000;
+        
+        // 重置配额计数器
+        setInterval(() => {
+            this.quotaUsed = 0;
+            this.quotaResetTime = Date.now() + 60000;
+        }, 60000);
     }
 
     async addRequest(request) {
@@ -90,13 +99,21 @@ class RequestManager {
     }
 
     async makeRequest(request) {
-        const { text, targetLanguage, apiKey, model = 'gemini-pro' } = request;
+        const { text, targetLang, apiKey, model = 'gemini-pro' } = request;
         console.log('Making translation request...');
 
         if (!apiKey) {
+            console.error('Translation error: No API Key provided');
             return { translatedText: '翻译请求失败: 请先在插件设置中配置有效的 API Key' };
         }
 
+        if (this.quotaUsed >= this.quotaLimit) {
+            const waitTime = this.quotaResetTime - Date.now();
+            if (waitTime > 0) {
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+        }
+        
         try {
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
                 method: 'POST',
@@ -106,7 +123,7 @@ class RequestManager {
                 body: JSON.stringify({
                     contents: [{
                         parts: [{
-                            text: `Translate the following text to ${targetLanguage}. Only return the translation without any explanation:\n${text}`
+                            text: `Translate the following text to ${targetLang}. Only return the translation without any explanation:\n${text}`
                         }]
                     }],
                     generationConfig: {
@@ -135,21 +152,28 @@ class RequestManager {
                 })
             });
 
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('API Response error:', errorData);
+                throw new Error(errorData.error?.message || 'API request failed');
+            }
+
             const data = await response.json();
             console.log('API Response data:', data);
 
-            if (!response.ok) {
-                const errorMessage = data.error?.message || 'API request failed';
-                throw new Error(errorMessage);
-            }
-
             if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-                return { translatedText: data.candidates[0].content.parts[0].text };
+                this.quotaUsed++;
+                return { translatedText: data.candidates[0].content.parts[0].text.trim() };
             }
 
             throw new Error('Invalid API response format');
         } catch (error) {
             console.error('Translation error:', error);
+            if (error.message.includes('Resource has been exhausted')) {
+                // 等待一分钟后重试
+                await new Promise(resolve => setTimeout(resolve, 60000));
+                return this.makeRequest(apiKey, text, targetLang);
+            }
             return { translatedText: `翻译请求失败: ${error.message}` };
         }
     }
@@ -159,18 +183,24 @@ class RequestManager {
         try {
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
             const data = await response.json();
-            console.log('Available models:', data);
             
             if (!response.ok) {
+                // 处理区域限制错误
+                if (data.error?.message?.includes('User location is not supported')) {
+                    // 返回默认的 Gemini Pro 模型
+                    return [{
+                        name: 'gemini-pro',
+                        displayName: 'Gemini Pro',
+                        description: 'Gemini Pro model for text generation and translation'
+                    }];
+                }
                 throw new Error(data.error?.message || 'Failed to fetch models');
             }
 
             // 过滤出合适的模型
             const availableModels = data.models
                 .filter(model => {
-                    // 只选择 Gemini 系列模型
                     return model.name.toLowerCase().includes('gemini') &&
-                           // 排除实验性和即将弃用的模型
                            !model.name.toLowerCase().includes('exp') &&
                            !model.description.toLowerCase().includes('experimental') &&
                            !model.description.toLowerCase().includes('deprecated');
@@ -178,16 +208,22 @@ class RequestManager {
                 .map(model => ({
                     name: model.name,
                     displayName: model.displayName,
-                    description: model.description.split('.')[0] // 只取第一句描述
+                    description: model.description.split('.')[0]
                 }));
 
-            // 按显示名称排序
-            availableModels.sort((a, b) => a.displayName.localeCompare(b.displayName));
-            
-            return availableModels;
+            return availableModels.length > 0 ? availableModels : [{
+                name: 'gemini-pro',
+                displayName: 'Gemini Pro',
+                description: 'Gemini Pro model for text generation and translation'
+            }];
         } catch (error) {
             console.error('Error fetching models:', error);
-            return [];
+            // 发生错误时返回默认模型
+            return [{
+                name: 'gemini-pro',
+                displayName: 'Gemini Pro',
+                description: 'Gemini Pro model for text generation and translation'
+            }];
         }
     }
 
@@ -201,50 +237,65 @@ class RequestManager {
         });
 
         try {
-            const response = await this.getAvailableModels(apiKey);
-            console.log('API验证 >> 获取可用模型:', {
-                模型总数: response.length,
-                操作时间: new Date().toLocaleTimeString(),
-                状态: '✓ 成功'
-            });
+            // 获取可用模型列表
+            const models = await this.getAvailableModels(apiKey);
+            
+            // 测试模型访问
+            try {
+                await this.testModelAccess(apiKey);
+                console.log('API验证 >> 验证完成:', {
+                    验证结果: '✓ 有效',
+                    可用模型数量: models.length,
+                    操作时间: new Date().toLocaleTimeString(),
+                    模型列表: models.map(m => m.displayName)
+                });
 
-            // 验证响应并获取模型列表
-            const validationResponse = await this.testModelAccess(apiKey);
-            console.log('API验证 >> 模型访问测试:', {
-                模型版本: validationResponse.modelVersion,
-                Token统计: validationResponse.usageMetadata,
-                操作时间: new Date().toLocaleTimeString(),
-                状态: '✓ 成功'
-            });
-
-            // 过滤并处理模型列表
-            const models = response
-                .filter(model => model.name.includes('gemini'))
-                .map(model => ({
-                    name: model.name,
-                    displayName: model.displayName,
-                    description: model.description.split('.')[0]
-                }));
-
-            console.log('API验证 >> 验证完成:', {
-                验证结果: '✓ 有效',
-                可用模型数量: models.length,
-                操作时间: new Date().toLocaleTimeString(),
-                模型列表: models.map(m => m.displayName)
-            });
-
-            return { isValid: true, models };
+                return { 
+                    isValid: true, 
+                    models,
+                    error: null
+                };
+            } catch (error) {
+                // 如果是区域限制错误，仍然返回有效，但使用默认模型
+                if (error.message?.includes('User location is not supported')) {
+                    console.log('API验证 >> 区域限制，使用默认模型');
+                    return {
+                        isValid: true,
+                        models: [{
+                            name: 'gemini-pro',
+                            displayName: 'Gemini Pro',
+                            description: 'Gemini Pro model for text generation and translation'
+                        }],
+                        error: 'User location is not supported, using default model'
+                    };
+                }
+                throw error;
+            }
         } catch (error) {
             console.error('API验证 >> 验证失败:', {
                 错误信息: error.message,
                 操作时间: new Date().toLocaleTimeString(),
                 状态: '× 失败'
             });
+            
+            // 如果是区域限制错误，仍然返回有效，但使用默认模型
+            if (error.message?.includes('User location is not supported')) {
+                return {
+                    isValid: true,
+                    models: [{
+                        name: 'gemini-pro',
+                        displayName: 'Gemini Pro',
+                        description: 'Gemini Pro model for text generation and translation'
+                    }],
+                    error: 'User location is not supported, using default model'
+                };
+            }
+            
             return { isValid: false, error: error.message };
         }
     }
 
-    // 添加模型访问测试方法
+    // 修改 testModelAccess 方法
     async testModelAccess(apiKey) {
         try {
             console.log('API验证 >> 开始测试模型访问:', {
@@ -268,8 +319,12 @@ class RequestManager {
 
             const data = await response.json();
             
+            if (!response.ok) {
+                throw new Error(data.error?.message || 'API request failed');
+            }
+
             console.log('API验证 >> 模型访问测试结果:', {
-                响应状态: response.ok ? '✓ 成功' : '× 失败',
+                响应状态: '✓ 成功',
                 时间: new Date().toLocaleTimeString(),
                 详细信息: data
             });
@@ -286,29 +341,40 @@ class RequestManager {
     }
 }
 
-// 创建请求管理器实例
+// 建请求管理器实例
 const requestManager = new RequestManager();
 
 // 监听来自content script的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // 添加调试日志
+    console.log('后台消息 >> 接收到完整请求:', request);
     console.log('后台消息 >> 接收到请求:', {
-        请求类型: request.action,
-        时间: new Date().toLocaleTimeString()
+        请求类型: request.type,
+        时间: new Date().toLocaleTimeString(),
+        详细信息: JSON.stringify(request)
     });
-    
-    if (request.action === "getApiKey") {
-        chrome.storage.sync.get(['apiKey', 'model'], function(result) {
-            console.log('配置获取 >> 当前设置:', {
-                API密钥: result.apiKey ? '已设置' : '未设置',
-                当前模型: result.model || '未设置',
-                获取时间: new Date().toLocaleTimeString()
-            });
-            sendResponse({ apiKey: result.apiKey, model: result.model });
+
+    if (request.type === 'getApiKey') {
+        console.log('API Key获取 >> 开始获取');
+        chrome.storage.sync.get('apiKey', (data) => {
+            if (chrome.runtime.lastError) {
+                console.error('API Key获取 >> 错误:', {
+                    错误信息: chrome.runtime.lastError,
+                    时间: new Date().toLocaleTimeString()
+                });
+                sendResponse({ error: 'Failed to retrieve API Key' });
+            } else {
+                console.log('API Key获取 >> 成功:', {
+                    状态: data.apiKey ? '✓ 已获取' : '× 未设置',
+                    时间: new Date().toLocaleTimeString()
+                });
+                sendResponse({ apiKey: data.apiKey });
+            }
         });
-        return true;
+        return true; // 保持消息通道开启
     }
 
-    if (request.action === "validateApiKey") {
+    if (request.type === 'validateApiKey') {
         console.log('API验证 >> 开始验证请求:', {
             API密钥: request.apiKey ? '已提供' : '未提供',
             时间: new Date().toLocaleTimeString()
@@ -330,68 +396,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     发生时间: new Date().toLocaleTimeString(),
                     状态: '× 失败'
                 });
-                sendResponse({ isValid: false, models: [] });
+                sendResponse({ isValid: false, models: [], error: error.message });
             });
         return true;
     }
 
-    if (request.action === "translateText") {
+    if (request.type === 'translateText') {
         console.log('翻译请求 >> 开始处理:', {
-            目标语言: request.targetLanguage,
-            使用模型: request.model,
+            目标语言: request.targetLang,
             文本长度: request.text.length,
             请求时间: new Date().toLocaleTimeString()
         });
-        
-        if (!request.apiKey) {
-            console.log('翻译请求 >> 验证失败:', {
-                原因: '缺少 API Key',
-                时间: new Date().toLocaleTimeString()
-            });
-            sendResponse({ 
-                translatedText: '翻译请求失败: 缺少 API Key。\n' +
-                               '请按以下步骤设置：\n' +
-                               '1. 点击插件图标\n' +
-                               '2. 选择"设置"\n' +
-                               '3. 输入您的 API Key\n' +
-                               '4. 保存并重试'
-            });
-            return true;
-        }
 
-        // 直接处理请求，不进行预验证
-        requestManager.addRequest(request)
-            .then(response => {
-                console.log('翻译请求 >> 处理完成:', {
-                    使用模型: request.model,
-                    翻译状态: response.translatedText.includes('翻译请求失败') ? '× 失败' : '✓ 成功',
-                    完成时间: new Date().toLocaleTimeString()
-                });
-                sendResponse(response);
-            })
-            .catch(error => {
-                console.error('翻译请求 >> 发生错误:', {
-                    使用模型: request.model,
-                    错误类型: error.message.includes('authentication credentials') ? 'API认证错误' :
-                             error.message.includes('network') ? '网络错误' :
-                             error.code === 429 ? '请求频率限制' : '其他错误',
-                    错误信息: error.message,
-                    发生时间: new Date().toLocaleTimeString()
-                });
-                let errorMessage = '翻译请求失败: ';
-                
-                if (error.message.includes('authentication credentials')) {
-                    errorMessage += 'API Key 无效或已过期。\n请检查并更新您的 API Key。';
-                } else if (error.message.includes('network')) {
-                    errorMessage += '网络连接错误。\n请检查网络连接并重试。';
-                } else if (error.code === 429) {
-                    errorMessage += '请求过于频繁。\n请稍后重试。';
-                } else {
-                    errorMessage += error.message;
+        // 先获取 API Key
+        chrome.storage.sync.get('apiKey', async (data) => {
+            try {
+                if (!data.apiKey) {
+                    console.error('翻译请求 >> 错误: API Key未设置');
+                    sendResponse({ translatedText: '翻译请求失败: 请先在插件设置中配置有效的 API Key' });
+                    return;
                 }
-                
-                sendResponse({ translatedText: errorMessage });
-            });
-        return true;
+
+                // 将 API Key 添加到请求中
+                const translationRequest = {
+                    ...request,
+                    apiKey: data.apiKey
+                };
+
+                console.log('翻译请求 >> API Key获取成功，开始翻译');
+                const response = await requestManager.addRequest(translationRequest);
+                console.log('翻译请求 >> 翻译完成:', response);
+                sendResponse({ translatedText: response.translatedText || '' });
+            } catch (error) {
+                console.error('翻译请求 >> 错误:', error);
+                sendResponse({ translatedText: `翻译请求失败: ${error.message}` });
+            }
+        });
+        return true; // Keep the message channel open for async response
     }
 });

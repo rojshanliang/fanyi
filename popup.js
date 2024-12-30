@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function validateApiKeyAndUpdateModels(apiKey, isSilent = false) {
         chrome.runtime.sendMessage(
             { 
-                action: "validateApiKey", 
+                type: "validateApiKey", 
                 apiKey: apiKey
             }, 
             function(response) {
@@ -183,5 +183,84 @@ function showMessage(message, type) {
         setTimeout(() => {
             statusMessage.style.display = 'none';
         }, 2000);
+    }
+}
+
+// 测试 API Key
+async function testApiKey(apiKey) {
+    try {
+        const response = await chrome.runtime.sendMessage({
+            type: 'validateApiKey',  // 确保设置正确的消息类型
+            apiKey: apiKey
+        });
+        
+        if (!response || typeof response !== 'object') {
+            throw new Error('Invalid response from background script');
+        }
+        
+        return response;
+    } catch (error) {
+        console.error('API Key validation error:', error);
+        throw error;
+    }
+}
+
+// 保存 API Key
+async function saveApiKey(apiKey) {
+    try {
+        await chrome.storage.sync.set({ apiKey });
+        const response = await testApiKey(apiKey);
+        return response;
+    } catch (error) {
+        console.error('Error saving API Key:', error);
+        throw error;
+    }
+}
+
+// 在验证 API Key 成功后添加模型选择逻辑
+async function validateAndSaveApiKey() {
+    const apiKey = document.getElementById('apiKey').value;
+    const response = await chrome.runtime.sendMessage({
+        type: 'validateApiKey',
+        apiKey: apiKey
+    });
+    
+    const modelSelect = document.getElementById('modelSelect');
+    modelSelect.innerHTML = ''; // 清空现有选项
+    
+    if (response.isValid) {
+        // 保存 API Key
+        await chrome.storage.sync.set({ apiKey });
+        
+        // 更新模型选择下拉框
+        if (response.models && response.models.length > 0) {
+            response.models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.name;
+                option.textContent = `${model.displayName}`;
+                modelSelect.appendChild(option);
+            });
+            modelSelect.disabled = false;
+            
+            // 默认选择第一个模型
+            modelSelect.value = response.models[0].name;
+            
+            // 保存默认模型
+            chrome.storage.sync.set({ 
+                model: response.models[0].name 
+            });
+
+            // 显示成功消息
+            showMessage(
+                response.error 
+                    ? 'API Key 验证成功 (区域限制使用默认模型)' 
+                    : 'API Key 验证成功', 
+                'success'
+            );
+        }
+    } else {
+        modelSelect.innerHTML = '<option value="">请先输入有效的 API Key</option>';
+        modelSelect.disabled = true;
+        showMessage('API Key 验证失败: ' + (response.error || '未知错误'), 'error');
     }
 }
